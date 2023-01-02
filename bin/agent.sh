@@ -2,31 +2,18 @@
 #
 # Author: @mbonastre https://github.com/mbonastre
 #
-# Updated: 2022-03-07
+# Updated: 2023-01-01
 #
 # This script allows easy use of "ssh-agent" from any terminal.
 # Works in Linux and MacOS.
 #
-# First time executed:
-#  - Runs ssh-agent 
-#  - Save variables to connect to agent
-#  - Loads default key (Ask for key password if necessary)
+# Possible improvements:
+#  - Currently, the password is requested in the terminal.
+#    With proper configuration, an X11 window could request it.
+#    Look at "SSH_ASKPASS" variable.
 #
-# Following executions:
-#  - Just load environ variables
-#
-# If key TTL has expired:
-#  - Loads it again (asking password)
-#
-# If saved environment variables are stale
-#  - Removes the file
-#  - Launches another agent
-#
-# Default key may depend on system and key type.
-# In my case: id_rsa.
-#
-#
-# To use this script, add these lines at the end of ".profile"
+
+# To use this script, add these lines at the end of ".bashrc"
 # (or equivalent file; I have only tested it in bash):
 #
 #  if [ -x ${HOME}/bin/agent.sh ] ; then
@@ -34,42 +21,74 @@
 #  fi
 #
 
-# First step:
-#  - Verify if ssh-agent is running and load variables
-#  - If socket invalid, remove variables file (it is stale)
-#
+# Set TTL (maximum time to ask for password again)
+#   130000  = 36h (asks at the begining of work day, every other day)
+#   1300000 = 15 dies
+#   2600000 = 30 dies (I use it on holidays if I leave scheduled processes)
+TTL=130000
 
+load_keys() {
+  ssh-add -l || ssh-add
+
+  # "ssh-add -l" Lists currently load keys
+  #   Fails if no identity is loaded
+  #
+  # "ssh-add" loads defalt identity (id_rsa)
+  #   Is executed only if "ssh-add -l" fails
+  #   Will request password if key is protected
+  #  
+  # You can modify this part if you want more keys or non-default ones:
+  #  - One non-default key: just add the path-name to the second "ssh-add"
+  #  - More than one key: replicate lines, checking for the specific key presence
+  #
+}
+
+if ! [ -d "${HOME}/.ssh" ] ; then
+  # If no .ssh dir, we do nothing
+  return
+fi
+
+# STEP 1: Verify if environment variables are already set
+#   (some other software may have already been configured)
+#   (GNOME keyring-daemon or similar)
+
+if [ -n "${SSH_AUTH_SOCK}" ] && [ -n "${SSH_AGENT_PID}" ]; then
+  if ! [ -S "${SSH_AUTH_SOCK}" ] ; then
+    # No socket means invalid variables
+    unset SSH_AUTH_SOCK
+    unset SSH_AGENT_PID
+  else
+    # We save environment to our file
+    cat > ${HOME}/.ssh/ssh_auth_env <<EOF
+SSH_AUTH_SOCK=${SSH_AUTH_SOCK}; export SSH_AUTH_SOCK;
+SSH_AGENT_PID=${SSH_AGENT_PID}; export SSH_AGENT_PID;
+echo Agent pid ${SSH_AGENT_PID};
+EOF
+  fi
+fi
+
+
+# STEP 2: load and check saved environment
+#  - Verify if environment file exists and load variables
+#  - If socket invalid, remove file (it is stale)
+#
 if [ -f ${HOME}/.ssh/ssh_auth_env ]; then
    .  ${HOME}/.ssh/ssh_auth_env
    [ -S "${SSH_AUTH_SOCK}" ] || rm ${HOME}/.ssh/ssh_auth_env
 fi
 
-# Second step:
-#  - If ssh-agent is not running launch it
+# STEP 3: launch ssh-agent if necessary
+#  - If no environment file, launch ssh-agent
 #  - Store and load variables
 #  - Set TTL (maximum time to ask for password again)
-#      130000 ${HOME} 36 hores (asks at the begining of work day, every other day)
-#      1300000 ${HOME} 15 dies
-#      2600000 ${HOME} 30 dies (I use it on holidays if I leave scheduled processes)
 #
 if [ ! -f ${HOME}/.ssh/ssh_auth_env ]; then
-  ssh-agent -t 130000 > ${HOME}/.ssh/ssh_auth_env
+  ssh-agent -t ${TTL} > ${HOME}/.ssh/ssh_auth_env
   .  ${HOME}/.ssh/ssh_auth_env
 fi
 
 
-# Third step:
-#  - If ssh-agent doesn't have keys, load default identity (id_rsa)
-#  - (If key has password, asks for it)
-#
-# You can modify this part if you want more keys or non-default ones:
-#  - One non-default key: just add the path-name to the second "ssh-add"
-#  - More than one key: replicate lines, checking for the specific key presence
-#
-ssh-add -l || ssh-add
+# STEP 4: Load identity, if necessary
+load_keys
 
-# Possible improvements:
-#  - Currently, the password is requested in the terminal.
-#    With proper configuration, an X11 window could request it.
-#    Look at "SSH_ASKPASS" variable.
-#
+unset -f load_keys
